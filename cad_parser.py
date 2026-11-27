@@ -7,39 +7,67 @@ import time
 from dotenv import load_dotenv
 from google import genai
 
-# ==========================================
-# 1. LOAD GEMINI API
-# ==========================================
+
+# ============================================================
+# 1. LOAD ENVIRONMENT VARIABLES AND GEMINI API KEY
+# ============================================================
 
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-if not GEMINI_API_KEY:
+def get_gemini_api_key():
+    """
+    Read the API key from:
+    1. Local .env / environment variables
+    2. Streamlit Cloud Secrets
+    """
+
+    api_key = os.getenv("GEMINI_API_KEY")
+
+    if api_key:
+        return api_key
+
+    try:
+        import streamlit as st
+
+        api_key = st.secrets.get("GEMINI_API_KEY")
+
+        if api_key:
+            return api_key
+
+    except Exception:
+        pass
+
     raise RuntimeError(
-        "GEMINI_API_KEY not found in .env file."
+        "GEMINI_API_KEY not found. "
+        "Add it to your local .env file or Streamlit Cloud Secrets."
     )
+
+
+GEMINI_API_KEY = get_gemini_api_key()
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 GEMINI_MODEL = "gemini-flash-lite-latest"
 
 
-# ==========================================
+# ============================================================
 # 2. GEMINI REQUEST WITH RETRIES
-# ==========================================
+# ============================================================
 
 def generate_with_retry(prompt, max_attempts=4):
 
     for attempt in range(max_attempts):
 
         try:
+
             response = client.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=prompt
             )
 
             if not response or not response.text:
+
                 raise ValueError(
                     "Gemini returned an empty response."
                 )
@@ -67,11 +95,13 @@ def generate_with_retry(prompt, max_attempts=4):
             )
 
             if not is_temporary:
+
                 raise RuntimeError(
                     f"Gemini API error: {error}"
                 ) from error
 
             if attempt == max_attempts - 1:
+
                 raise RuntimeError(
                     "Gemini is temporarily unavailable or "
                     "the API quota has been reached. "
@@ -88,13 +118,17 @@ def generate_with_retry(prompt, max_attempts=4):
             time.sleep(wait_time)
 
 
-# ==========================================
+# ============================================================
 # 3. CAD REQUEST PARSER
-# ==========================================
+# ============================================================
 
 def parse_cad_request(user_request):
 
-    if not isinstance(user_request, str) or not user_request.strip():
+    if (
+        not isinstance(user_request, str)
+        or not user_request.strip()
+    ):
+
         raise ValueError(
             "Please enter a valid CAD request."
         )
@@ -304,19 +338,18 @@ IMPORTANT:
 Return the JSON specification now.
 """
 
-    # ======================================
+    # ========================================================
     # 4. SEND REQUEST TO GEMINI
-    # ======================================
+    # ========================================================
 
     response_text = generate_with_retry(prompt)
 
-    # ======================================
-    # 5. CLEAN JSON RESPONSE
-    # ======================================
+    # ========================================================
+    # 5. CLEAN GEMINI JSON RESPONSE
+    # ========================================================
 
     response_text = response_text.strip()
 
-    # Remove Markdown code fences if returned
     response_text = re.sub(
         r"^```(?:json)?\s*",
         "",
@@ -332,24 +365,27 @@ Return the JSON specification now.
 
     response_text = response_text.strip()
 
-    # ======================================
-    # 6. CONVERT JSON TO PYTHON DICT
-    # ======================================
+    # ========================================================
+    # 6. CONVERT JSON TO PYTHON DICTIONARY
+    # ========================================================
 
     try:
+
         specification = json.loads(response_text)
 
     except json.JSONDecodeError as error:
+
         raise ValueError(
             "Gemini returned invalid JSON:\n"
             + response_text
         ) from error
 
-    # ======================================
+    # ========================================================
     # 7. VALIDATE JSON STRUCTURE
-    # ======================================
+    # ========================================================
 
     if not isinstance(specification, dict):
+
         raise ValueError(
             "CAD specification must be a JSON object."
         )
@@ -366,49 +402,75 @@ Return the JSON specification now.
     ]
 
     for key in required_keys:
+
         if key not in specification:
+
             raise ValueError(
                 f"Missing required JSON field: {key}"
             )
 
     if not isinstance(specification["component"], str):
-        raise ValueError("Component must be a string.")
+
+        raise ValueError(
+            "Component must be a string."
+        )
 
     if specification["units"] != "mm":
-        raise ValueError("CAD units must be mm.")
+
+        raise ValueError(
+            "CAD units must be mm."
+        )
 
     if not isinstance(specification["operations"], list):
-        raise ValueError("Operations must be a list.")
+
+        raise ValueError(
+            "Operations must be a list."
+        )
 
     if not isinstance(specification["dimensions"], dict):
-        raise ValueError("Dimensions must be an object.")
+
+        raise ValueError(
+            "Dimensions must be an object."
+        )
 
     if not isinstance(specification["features"], list):
-        raise ValueError("Features must be a list.")
+
+        raise ValueError(
+            "Features must be a list."
+        )
 
     if not isinstance(specification["missing_parameters"], list):
-        raise ValueError("Missing parameters must be a list.")
+
+        raise ValueError(
+            "Missing parameters must be a list."
+        )
 
     if not isinstance(specification["assumptions"], list):
-        raise ValueError("Assumptions must be a list.")
+
+        raise ValueError(
+            "Assumptions must be a list."
+        )
 
     for index, feature in enumerate(specification["features"]):
 
         if not isinstance(feature, dict):
+
             raise ValueError(
                 f"Feature {index + 1} must be an object."
             )
 
         if "type" not in feature:
+
             raise ValueError(
                 f"Feature {index + 1} has no type."
             )
 
-    # ======================================
+    # ========================================================
     # 8. CHECK MISSING PARAMETERS
-    # ======================================
+    # ========================================================
 
     if specification["missing_parameters"]:
+
         missing = ", ".join(
             str(item)
             for item in specification["missing_parameters"]
@@ -419,8 +481,8 @@ Return the JSON specification now.
             + missing
         )
 
-    # ======================================
+    # ========================================================
     # 9. RETURN FINAL SPECIFICATION
-    # ======================================
+    # ========================================================
 
     return specification
