@@ -1,0 +1,246 @@
+{
+    "component": "automotive_engine_piston",
+    "units": "mm",
+    "operations": [
+        "cylinder",
+        "hollow",
+        "ring_grooves",
+        "boss",
+        "through_hole",
+        "pocket",
+        "fillet"
+    ],
+    "dimensions": {
+        "outer_diameter": 86.0,
+        "total_height": 75.0,
+        "crown_thickness": 10.0,
+        "skirt_depth": 40.0,
+        "skirt_wall_thickness": 3.5,
+        "skirt_outer_diameter": 85.8,
+        "bowl_diameter": 48.0,
+        "bowl_depth": 3.0,
+        "pin_boss_diameter": 30.0,
+        "pin_boss_thickness": 12.0,
+        "pin_diameter": 22.0,
+        "pin_centre_height": 45.0,
+        "ring_1_width": 2.0,
+        "ring_1_depth": 1.2,
+        "ring_1_position": 13.0,
+        "ring_2_width": 2.0,
+        "ring_2_depth": 1.2,
+        "ring_2_position": 18.0,
+        "oil_ring_width": 3.0,
+        "oil_ring_depth": 1.5,
+        "oil_ring_position": 24.0,
+        "oil_drain_hole_diameter": 3.0,
+        "oil_drain_hole_count": 8,
+        "oil_drain_hole_position": 29.0
+    },
+    "features": [
+        {
+            "type": "cylinder",
+            "name": "main_body",
+            "diameter": 86.0,
+            "height": 75.0,
+            "axis": "Z"
+        },
+        {
+            "type": "pocket",
+            "length": 48.0,
+            "width": 48.0,
+            "depth": 3.0,
+            "position": [
+                0,
+                0,
+                72.0
+            ]
+        },
+        {
+            "type": "ring_grooves",
+            "count": 3,
+            "depth": 1.2,
+            "width": 2.0,
+            "positions": [
+                13.0,
+                18.0,
+                24.0
+            ]
+        },
+        {
+            "type": "hollow",
+            "wall_thickness": 3.5,
+            "depth": 65.0
+        },
+        {
+            "type": "boss",
+            "name": "pin_boss_1",
+            "diameter": 30.0,
+            "height": 12.0,
+            "position": [
+                -15.0,
+                0,
+                30.0
+            ]
+        },
+        {
+            "type": "boss",
+            "name": "pin_boss_2",
+            "diameter": 30.0,
+            "height": 12.0,
+            "position": [
+                15.0,
+                0,
+                30.0
+            ]
+        },
+        {
+            "type": "wrist_pin_hole",
+            "diameter": 22.0,
+            "axis": [
+                1,
+                0,
+                0
+            ],
+            "center_height": 45.0
+        },
+        {
+            "type": "through_hole",
+            "name": "oil_drain_hole_1",
+            "diameter": 3.0,
+            "position": [
+                43.0,
+                0,
+                46.0
+            ],
+            "axis": [
+                1,
+                0,
+                0
+            ]
+        },
+        {
+            "type": "through_hole",
+            "name": "oil_drain_hole_2",
+            "diameter": 3.0,
+            "position": [
+                30.4,
+                30.4,
+                46.0
+            ],
+            "axis": [
+                0.707,
+                0.707,
+                0
+            ]
+        },
+        {
+            "type": "through_hole",
+            "name": "oil_drain_hole_3",
+            "diameter": 3.0,
+            "position": [
+                0,
+                43.0,
+                46.0
+            ],
+            "axis": [
+                0,
+                1,
+                0
+            ]
+        },
+        {
+            "type": "through_hole",
+            "name": "oil_drain_hole_4",
+            "diameter": 3.0,
+            "position": [
+                -30.4,
+                30.4,
+                46.0
+            ],
+            "axis": [
+                -0.707,
+                0.707,
+                0
+            ]
+        },
+        {
+            "type": "through_hole",
+            "name": "oil_drain_hole_5",
+            "diameter": 3.0,
+            "position": [
+                -43.0,
+                0,
+                46.0
+            ],
+            "axis": [
+                -1,
+                0,
+                0
+            ]
+        },
+        {
+            "type": "through_hole",
+            "name": "oil_drain_hole_6",
+            "diameter": 3.0,
+            "position": [
+                -30.4,
+                -30.4,
+                46.0
+            ],
+            "axis": [
+                -0.707,
+                -0.707,
+                0
+            ]
+        },
+        {
+            "type": "through_hole",
+            "name": "oil_drain_hole_7",
+            "diameter": 3.0,
+            "position": [
+                0,
+                -43.0,
+                46.0
+            ],
+            "axis": [
+                0,
+                -1,
+                0
+            ]
+        },
+        {
+            "type": "through_hole",
+            "name": "oil_drain_hole_8",
+            "diameter": 3.0,
+            "position": [
+                30.4,
+                -30.4,
+                46.0
+            ],
+            "axis": [
+                0.707,
+                -0.707,
+                0
+            ]
+        },
+        {
+            "type": "fillet",
+            "radius": 1.0
+        },
+        {
+            "type": "fillet",
+            "radius": 2.0
+        },
+        {
+            "type": "fillet",
+            "radius": 0.5
+        }
+    ],
+    "material": "Aluminium-Silicon alloy",
+    "missing_parameters": [],
+    "assumptions": [
+        "Combustion bowl is centered on the top crown face.",
+        "Oil drainage holes are evenly distributed at 45-degree intervals around the circumference.",
+        "Fillet radii are applied to relevant functional edges based on size hierarchy."
+    ]
+}

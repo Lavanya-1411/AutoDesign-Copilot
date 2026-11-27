@@ -1,0 +1,915 @@
+
+import FreeCAD as App
+import Part
+import Mesh
+import Import
+
+import os
+import json
+import math
+import traceback
+
+
+# ==================================================
+# 1. PATHS
+# ==================================================
+
+MACRO_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(MACRO_DIR)
+
+SPEC_FILE = os.environ.get(
+    "AUTODESIGN_SPEC_FILE",
+    os.path.join(MACRO_DIR, "current_spec.json")
+)
+
+OUTPUT_DIR = os.environ.get(
+    "AUTODESIGN_OUTPUT_DIR",
+    os.path.join(PROJECT_DIR, "output")
+)
+
+LOG_FILE = os.path.join(
+    PROJECT_DIR,
+    "freecad_macro_log.txt"
+)
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+# ==================================================
+# 2. LOGGING
+# ==================================================
+
+def log(message):
+    message = str(message)
+    print(message)
+
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(message + "\n")
+
+
+# ==================================================
+# 3. BASIC HELPERS
+# ==================================================
+
+def positive(value, name):
+    value = float(value)
+
+    if value <= 0:
+        raise ValueError(name + " must be greater than zero.")
+
+    return value
+
+
+def safe_name(name):
+    result = "".join(
+        c if c.isalnum() or c in "_-" else "_"
+        for c in str(name)
+    )
+
+    return result.strip("_") or "CAD_Model"
+
+
+def check_shape(shape):
+    if shape.isNull():
+        raise ValueError("Generated geometry is empty.")
+
+    if not shape.isValid():
+        shape = shape.removeSplitter()
+
+    if shape.isNull() or not shape.isValid():
+        raise ValueError("Generated geometry is invalid.")
+
+    if len(shape.Solids) != 1:
+        raise ValueError(
+            "Expected one connected solid. Found "
+            + str(len(shape.Solids))
+            + " solids."
+        )
+
+    return shape
+
+
+def cut_shape(body, tool, operation_name):
+    result = body.cut(tool)
+    result = result.removeSplitter()
+
+    if result.isNull() or not result.isValid():
+        raise ValueError(operation_name + " failed.")
+
+    if len(result.Solids) != 1:
+        raise ValueError(
+            operation_name + " created disconnected solids."
+        )
+
+    return result
+
+
+def fuse_shapes(body, tool, operation_name):
+    result = body.fuse(tool)
+    result = result.removeSplitter()
+
+    if result.isNull() or not result.isValid():
+        raise ValueError(operation_name + " failed.")
+
+    if len(result.Solids) != 1:
+        raise ValueError(
+            operation_name + " created disconnected solids."
+        )
+
+    return result
+
+
+def get_dimension(dimensions, *names, default=None):
+    for name in names:
+        if name in dimensions and dimensions[name] is not None:
+            return dimensions[name]
+
+    return default
+
+
+# ==================================================
+# 4. CYLINDER AND HOLE HELPERS
+# ==================================================
+
+def cylinder(diameter, height, position=(0, 0, 0), axis=(0, 0, 1)):
+    diameter = positive(diameter, "Cylinder diameter")
+    height = positive(height, "Cylinder height")
+
+    return Part.makeCylinder(
+        diameter / 2,
+        height,
+        App.Vector(*position),
+        App.Vector(*axis)
+    )
+
+
+# ==================================================
+# 5. PISTON GENERATOR
+# ==================================================
+
+def create_piston(spec):
+
+    dimensions = spec.get("dimensions", {})
+
+    log("Starting dedicated piston geometry generation.")
+
+    # Main dimensions
+    outer_diameter = positive(
+        get_dimension(
+            dimensions,
+            "outer_diameter",
+            "diameter"
+        ),
+        "Piston outer diameter"
+    )
+
+    total_height = positive(
+        get_dimension(
+            dimensions,
+            "total_height",
+            "height"
+        ),
+        "Piston total height"
+    )
+
+    crown_thickness = positive(
+        get_dimension(
+            dimensions,
+            "crown_thickness",
+            default=10
+        ),
+        "Crown thickness"
+    )
+
+    wall_thickness = positive(
+        get_dimension(
+            dimensions,
+            "wall_thickness",
+            "skirt_wall_thickness",
+            default=3.5
+        ),
+        "Skirt wall thickness"
+    )
+
+    outer_radius = outer_diameter / 2
+
+    if crown_thickness >= total_height:
+        raise ValueError(
+            "Crown thickness must be less than total piston height."
+        )
+
+    if wall_thickness >= outer_radius:
+        raise ValueError(
+            "Skirt wall thickness is too large."
+        )
+
+    inner_radius = outer_radius - wall_thickness
+
+    # --------------------------------------------------
+    # A. Main piston body
+    # --------------------------------------------------
+
+    body = cylinder(
+        outer_diameter,
+        total_height
+    )
+
+    log("Created piston outer cylindrical body.")
+
+    # --------------------------------------------------
+    # B. Hollow skirt
+    # --------------------------------------------------
+
+    skirt_depth = total_height - crown_thickness
+
+    inner_tool = Part.makeCylinder(
+        inner_radius,
+        skirt_depth + 1,
+        App.Vector(0, 0, -1),
+        App.Vector(0, 0, 1)
+    )
+
+    body = cut_shape(
+        body,
+        inner_tool,
+        "Piston skirt hollowing"
+    )
+
+    log("Created hollow piston skirt.")
+
+    # --------------------------------------------------
+    # C. Internal piston pin bosses
+    # --------------------------------------------------
+
+    boss_diameter = float(
+        get_dimension(
+            dimensions,
+            "boss_diameter",
+            default=30
+        )
+    )
+
+    pin_diameter = float(
+        get_dimension(
+            dimensions,
+            "pin_diameter",
+            default=22
+        )
+    )
+
+    pin_center_below_crown = float(
+        get_dimension(
+            dimensions,
+            "pin_center_height",
+            "pin_center_below_crown",
+            default=45
+        )
+    )
+
+    pin_z = total_height - pin_center_below_crown
+
+    boss_radius = boss_diameter / 2
+
+    if pin_z <= 0 or pin_z >= skirt_depth:
+        raise ValueError(
+            "Piston pin centre must be inside the skirt region."
+        )
+
+    if boss_diameter > outer_diameter - 2 * wall_thickness:
+        raise ValueError(
+            "Piston pin boss diameter is too large."
+        )
+
+    # Bosses extend along the X direction.
+    boss_length = 2 * inner_radius
+
+    boss_tool = Part.makeCylinder(
+        boss_radius,
+        boss_length,
+        App.Vector(-inner_radius, 0, pin_z),
+        App.Vector(1, 0, 0)
+    )
+
+    body = fuse_shapes(
+        body,
+        boss_tool,
+        "Piston pin boss creation"
+    )
+
+    log("Created internal piston pin bosses.")
+
+    # --------------------------------------------------
+    # D. Piston pin bore
+    # --------------------------------------------------
+
+    pin_tool = Part.makeCylinder(
+        pin_diameter / 2,
+        outer_diameter + 20,
+        App.Vector(-outer_radius - 10, 0, pin_z),
+        App.Vector(1, 0, 0)
+    )
+
+    body = cut_shape(
+        body,
+        pin_tool,
+        "Piston pin bore"
+    )
+
+    log("Created piston pin bore.")
+
+    # --------------------------------------------------
+    # E. Combustion bowl
+    # --------------------------------------------------
+
+    bowl_diameter = float(
+        get_dimension(
+            dimensions,
+            "combustion_bowl_diameter",
+            "bowl_diameter",
+            default=0
+        )
+    )
+
+    bowl_depth = float(
+        get_dimension(
+            dimensions,
+            "combustion_bowl_depth",
+            "bowl_depth",
+            default=0
+        )
+    )
+
+    if bowl_diameter > 0 and bowl_depth > 0:
+
+        if bowl_diameter >= outer_diameter:
+            raise ValueError(
+                "Combustion bowl diameter must be smaller than piston diameter."
+            )
+
+        if bowl_depth >= crown_thickness:
+            raise ValueError(
+                "Combustion bowl depth must be less than crown thickness."
+            )
+
+        bowl_tool = Part.makeCylinder(
+            bowl_diameter / 2,
+            bowl_depth,
+            App.Vector(
+                0,
+                0,
+                total_height - bowl_depth
+            ),
+            App.Vector(0, 0, 1)
+        )
+
+        body = cut_shape(
+            body,
+            bowl_tool,
+            "Combustion bowl"
+        )
+
+        log("Created combustion bowl.")
+
+    # --------------------------------------------------
+    # F. Piston ring grooves
+    # --------------------------------------------------
+
+    groove_features = [
+        feature
+        for feature in spec.get("features", [])
+        if feature.get("type", "").lower() == "ring_grooves"
+    ]
+
+    groove_positions = get_dimension(
+        dimensions,
+        "ring_groove_positions",
+        default=[13, 18, 24]
+    )
+
+    groove_widths = get_dimension(
+        dimensions,
+        "ring_groove_widths",
+        default=[2, 2, 3]
+    )
+
+    groove_depths = get_dimension(
+        dimensions,
+        "ring_groove_depths",
+        default=[1.2, 1.2, 1.5]
+    )
+
+    if groove_features:
+        feature = groove_features[0]
+
+        groove_positions = feature.get(
+            "positions",
+            groove_positions
+        )
+
+        groove_widths = feature.get(
+            "widths",
+            groove_widths
+        )
+
+        groove_depths = feature.get(
+            "depths",
+            groove_depths
+        )
+
+    if not isinstance(groove_positions, (list, tuple)):
+        groove_positions = [groove_positions]
+
+    if not isinstance(groove_widths, (list, tuple)):
+        groove_widths = [groove_widths]
+
+    if not isinstance(groove_depths, (list, tuple)):
+        groove_depths = [groove_depths]
+
+    groove_count = len(groove_positions)
+
+    if len(groove_widths) not in [1, groove_count]:
+        raise ValueError("Ring groove width count does not match positions.")
+
+    if len(groove_depths) not in [1, groove_count]:
+        raise ValueError("Ring groove depth count does not match positions.")
+
+    for i in range(groove_count):
+
+        position_below_top = positive(
+            groove_positions[i],
+            "Ring groove position"
+        )
+
+        width = positive(
+            groove_widths[i] if len(groove_widths) > 1
+            else groove_widths[0],
+            "Ring groove width"
+        )
+
+        depth = positive(
+            groove_depths[i] if len(groove_depths) > 1
+            else groove_depths[0],
+            "Ring groove depth"
+        )
+
+        if depth >= wall_thickness:
+            raise ValueError(
+                "Ring groove depth must be smaller than skirt wall thickness."
+            )
+
+        groove_top = total_height - position_below_top
+        groove_bottom = groove_top - width
+
+        if groove_bottom <= 0 or groove_top >= total_height:
+            raise ValueError(
+                "Ring groove position is outside the piston body."
+            )
+
+        # Annular cutter around the outside circumference.
+        outer_tool = Part.makeCylinder(
+            outer_radius + 1,
+            width,
+            App.Vector(0, 0, groove_bottom)
+        )
+
+        inner_tool = Part.makeCylinder(
+            outer_radius - depth,
+            width,
+            App.Vector(0, 0, groove_bottom)
+        )
+
+        groove_tool = outer_tool.cut(inner_tool)
+
+        body = cut_shape(
+            body,
+            groove_tool,
+            "Piston ring groove " + str(i + 1)
+        )
+
+        log(
+            "Created ring groove "
+            + str(i + 1)
+            + " at "
+            + str(position_below_top)
+            + " mm below crown."
+        )
+
+    # --------------------------------------------------
+    # G. Oil drain holes
+    # --------------------------------------------------
+
+    oil_hole_diameter = float(
+        get_dimension(
+            dimensions,
+            "oil_hole_diameter",
+            default=0
+        )
+    )
+
+    oil_hole_count = int(
+        get_dimension(
+            dimensions,
+            "oil_hole_count",
+            default=0
+        )
+    )
+
+    oil_hole_position = float(
+        get_dimension(
+            dimensions,
+            "oil_hole_position",
+            default=29
+        )
+    )
+
+    if oil_hole_diameter > 0 and oil_hole_count > 0:
+
+        oil_z = total_height - oil_hole_position
+
+        if oil_z <= 0 or oil_z >= skirt_depth:
+            raise ValueError(
+                "Oil drain hole position is outside the skirt."
+            )
+
+        for i in range(oil_hole_count):
+
+            angle = 2 * math.pi * i / oil_hole_count
+
+            direction = App.Vector(
+                math.cos(angle),
+                math.sin(angle),
+                0
+            )
+
+            start = App.Vector(
+                direction.x * (outer_radius + 1),
+                direction.y * (outer_radius + 1),
+                oil_z
+            )
+
+            hole_tool = Part.makeCylinder(
+                oil_hole_diameter / 2,
+                wall_thickness + 4,
+                start,
+                App.Vector(
+                    -direction.x,
+                    -direction.y,
+                    0
+                )
+            )
+
+            body = cut_shape(
+                body,
+                hole_tool,
+                "Oil drain hole " + str(i + 1)
+            )
+
+        log("Created piston oil drain holes.")
+
+    # --------------------------------------------------
+    # H. Final validation
+    # --------------------------------------------------
+
+    body = check_shape(body)
+
+    log("Piston geometry completed.")
+
+    return body
+
+
+# ==================================================
+# 6. GENERIC CYLINDER GENERATOR
+# ==================================================
+
+def create_generic_cylinder(spec):
+
+    dimensions = spec.get("dimensions", {})
+
+    features = spec.get("features", [])
+
+    diameter = None
+    height = None
+
+    for feature in features:
+
+        if feature.get("type", "").lower() == "cylinder":
+
+            diameter = feature.get(
+                "diameter",
+                dimensions.get("diameter")
+            )
+
+            height = feature.get(
+                "height",
+                dimensions.get("height")
+            )
+
+            break
+
+    if diameter is None:
+        diameter = get_dimension(
+            dimensions,
+            "outer_diameter",
+            "diameter",
+            "main_disc_outer_diameter"
+        )
+
+    if height is None:
+        height = get_dimension(
+            dimensions,
+            "total_height",
+            "height",
+            "main_disc_thickness"
+        )
+
+    if diameter is None or height is None:
+        raise ValueError(
+            "Generic cylindrical component needs diameter and height."
+        )
+
+    return cylinder(diameter, height)
+
+
+# ==================================================
+# 7. GENERIC FEATURE PROCESSOR
+# ==================================================
+
+def process_generic_features(body, features):
+
+    for feature in features:
+
+        feature_type = feature.get("type", "").lower()
+
+        log("Processing feature: " + feature_type)
+
+        if feature_type in [
+            "cylinder",
+            "ring_grooves",
+            "y_control_arm"
+        ]:
+            continue
+
+        elif feature_type in ["through_hole", "hole"]:
+
+            diameter = positive(
+                feature["diameter"],
+                "Hole diameter"
+            )
+
+            position = feature.get(
+                "position",
+                [0, 0, 0]
+            )
+
+            axis = feature.get(
+                "axis",
+                [0, 0, 1]
+            )
+
+            direction = App.Vector(*axis)
+            direction.normalize()
+
+            diagonal = math.sqrt(
+                body.BoundBox.XLength ** 2
+                + body.BoundBox.YLength ** 2
+                + body.BoundBox.ZLength ** 2
+            )
+
+            start = App.Vector(*position) - direction * (diagonal + 10)
+
+            tool = Part.makeCylinder(
+                diameter / 2,
+                2 * (diagonal + 10),
+                start,
+                direction
+            )
+
+            body = cut_shape(
+                body,
+                tool,
+                "Through hole"
+            )
+
+        elif feature_type in ["boss", "add_cylinder"]:
+
+            tool = cylinder(
+                feature["diameter"],
+                feature["height"],
+                feature.get("position", [0, 0, 0]),
+                feature.get("axis", [0, 0, 1])
+            )
+
+            body = fuse_shapes(
+                body,
+                tool,
+                "Boss creation"
+            )
+
+        elif feature_type == "add_box":
+
+            tool = Part.makeBox(
+                positive(feature["length"], "Box length"),
+                positive(feature["width"], "Box width"),
+                positive(feature["height"], "Box height"),
+                App.Vector(*feature.get("position", [0, 0, 0]))
+            )
+
+            body = fuse_shapes(
+                body,
+                tool,
+                "Box addition"
+            )
+
+        else:
+            log("Unsupported generic feature skipped: " + feature_type)
+
+    return body
+
+
+# ==================================================
+# 8. MAIN COMPONENT SELECTOR
+# ==================================================
+
+def create_component(spec):
+
+    component = str(
+        spec.get("component", "")
+    ).lower()
+
+    log("Selected component: " + component)
+
+    # Piston-specific builder
+    if "piston" in component:
+        return create_piston(spec)
+
+    # Generic cylindrical components
+    if any(
+        word in component
+        for word in ["flywheel", "pulley", "rotor", "disc"]
+    ):
+        body = create_generic_cylinder(spec)
+
+        body = process_generic_features(
+            body,
+            spec.get("features", [])
+        )
+
+        return check_shape(body)
+
+    # Generic fallback
+    body = create_generic_cylinder(spec)
+
+    body = process_generic_features(
+        body,
+        spec.get("features", [])
+    )
+
+    return check_shape(body)
+
+
+# ==================================================
+# 9. EXPORT CAD FILES
+# ==================================================
+
+def export_model(body, component):
+
+    filename = safe_name(component)
+
+    fcstd_path = os.path.join(
+        OUTPUT_DIR,
+        filename + ".FCStd"
+    )
+
+    step_path = os.path.join(
+        OUTPUT_DIR,
+        filename + ".step"
+    )
+
+    stl_path = os.path.join(
+        OUTPUT_DIR,
+        filename + ".stl"
+    )
+
+    doc = App.newDocument("AutoDesign_" + filename)
+
+    obj = doc.addObject(
+        "PartDesign::Feature",
+        "GeneratedBody"
+    )
+
+    obj.Label = str(component)
+    obj.Shape = body
+
+    doc.recompute()
+
+    doc.saveAs(fcstd_path)
+
+    Import.export(
+        [obj],
+        step_path
+    )
+
+    Mesh.export(
+        [obj],
+        stl_path
+    )
+
+    doc.recompute()
+
+    for path in [fcstd_path, step_path, stl_path]:
+
+        if not os.path.exists(path):
+            raise RuntimeError(
+                "Export file was not created: " + path
+            )
+
+        if os.path.getsize(path) == 0:
+            raise RuntimeError(
+                "Export file is empty: " + path
+            )
+
+        log("Created: " + path)
+
+    return [fcstd_path, step_path, stl_path]
+
+
+# ==================================================
+# 10. MAIN GENERATION
+# ==================================================
+
+def generate_model():
+
+    log("======================================")
+    log("AUTODESIGN COPILOT - FREECAD")
+    log("======================================")
+
+    log("Specification: " + SPEC_FILE)
+    log("Output folder: " + OUTPUT_DIR)
+
+    if not os.path.exists(SPEC_FILE):
+        raise FileNotFoundError(
+            "Specification file not found: " + SPEC_FILE
+        )
+
+    with open(
+        SPEC_FILE,
+        "r",
+        encoding="utf-8"
+    ) as f:
+
+        spec = json.load(f)
+
+    if not isinstance(spec, dict):
+        raise ValueError("Invalid specification JSON.")
+
+    if spec.get("missing_parameters"):
+        raise ValueError(
+            "Specification contains missing parameters: "
+            + str(spec["missing_parameters"])
+        )
+
+    component = spec.get(
+        "component",
+        "CAD_Model"
+    )
+
+    log("Component: " + str(component))
+
+    body = create_component(spec)
+
+    body = check_shape(body)
+
+    log("Geometry validation successful.")
+
+    files = export_model(
+        body,
+        component
+    )
+
+    log("======================================")
+    log("CAD GENERATION SUCCESSFUL")
+    log("======================================")
+
+    return files
+
+
+# ==================================================
+# 11. EXECUTION
+# ==================================================
+
+try:
+
+    with open(LOG_FILE, "w", encoding="utf-8") as f:
+        f.write("Starting FreeCAD macro...\n")
+
+    generated_files = generate_model()
+
+    for file_path in generated_files:
+        log(file_path)
+
+except Exception:
+
+    log("CAD GENERATION FAILED")
+    log(traceback.format_exc())
+
+    raise
