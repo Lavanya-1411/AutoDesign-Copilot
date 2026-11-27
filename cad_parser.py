@@ -48,7 +48,7 @@ GEMINI_API_KEY = get_gemini_api_key()
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-GEMINI_MODEL = "gemini-flash-lite-latest"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 
 # ============================================================
